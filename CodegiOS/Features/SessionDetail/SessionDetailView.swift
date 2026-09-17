@@ -21,6 +21,9 @@ struct SessionDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    /// Set on any `.background` frame, consumed on the next `.active` — see the
+    /// `onChange(of: scenePhase)` below for why this beats comparing adjacent phases.
+    @State private var wasBackgrounded = false
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showDetails = false
@@ -134,12 +137,23 @@ struct SessionDetailView: View {
         .onDisappear { model.teardown() }
         // The live WebSocket is suspended (and often killed outright) while
         // backgrounded, so returning here otherwise leaves a frozen transcript
-        // until the user backs all the way out and re-enters. `old == .background`
-        // (not just `new == .active`) skips the transient `.inactive` blips a
-        // sheet/alert/control-center pull causes, which aren't real resumes.
-        .onChange(of: scenePhase) { old, new in
-            if old == .background, new == .active {
+        // until the user backs all the way out and re-enters. Returning from the
+        // background almost always lands on `.active` via an intermediate
+        // `.inactive` frame first (`.background` -> `.inactive` -> `.active`), so
+        // comparing only the immediately-prior phase misses most real resumes —
+        // `wasBackgrounded` instead remembers that a `.background` frame happened
+        // at all since the last refresh, however many `.inactive` frames follow it.
+        // A sheet/alert/control-center pull's `.active` -> `.inactive` -> `.active`
+        // blip never sets the flag, so it still won't trigger a spurious refresh.
+        .onChange(of: scenePhase) { _, new in
+            switch new {
+            case .background:
+                wasBackgrounded = true
+            case .active where wasBackgrounded:
+                wasBackgrounded = false
                 Task { await model.refreshOnForeground() }
+            default:
+                break
             }
         }
         // Haptics — the app's marquee "felt" moments, all keyed off existing
