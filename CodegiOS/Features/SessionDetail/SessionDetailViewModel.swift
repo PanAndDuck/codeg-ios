@@ -364,7 +364,31 @@ final class SessionDetailViewModel {
     /// `.new` session — there's nothing server-linked yet to resync.
     func refreshOnForeground() async {
         guard case .existing(let id) = mode, phase == .loaded else { return }
+        // A turn that was streaming when the app backgrounded left `liveTurn`
+        // (and its stream) in place — iOS suspends the socket rather than closing
+        // it, so nothing locally noticed it die. `reattachIfLive` no-ops whenever
+        // `liveTurn != nil` (its "we're already streaming" fast path, correct at
+        // a fresh `load()` but not here), so without discarding that stale state
+        // first, the freshly-fetched final reply would render ALONGSIDE a
+        // permanently-stuck "still in progress" placeholder + Stop button.
+        discardStaleLiveState()
         await syncExisting(id: id, stickToBottom: false)
+    }
+
+    /// Drop local tracking of a live turn WITHOUT telling the server to cancel it
+    /// (unlike `cancel()`) — the turn may genuinely still be running; only our
+    /// view of it (built from a socket iOS suspended while backgrounded) is
+    /// stale. `reattachIfLive`, called right after, re-discovers the true state:
+    /// a fresh stream if it's still going, or nothing further if the server-
+    /// fetched `turns` already carry its finished reply.
+    private func discardStaleLiveState() {
+        guard liveTurn != nil else { return }
+        isTurnActive = false
+        sendTask?.cancel()
+        consumerTask?.cancel()
+        closeStream()
+        liveTurn = nil
+        sendState = .idle
     }
 
     /// Populate the draft's folder/agent lists and pick sensible defaults
