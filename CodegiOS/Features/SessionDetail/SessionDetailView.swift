@@ -20,6 +20,7 @@ struct SessionDetailView: View {
     @State private var model: SessionDetailViewModel
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showRename = false
     @State private var renameText = ""
     @State private var showDetails = false
@@ -131,6 +132,16 @@ struct SessionDetailView: View {
         }
         .task { await model.load() }
         .onDisappear { model.teardown() }
+        // The live WebSocket is suspended (and often killed outright) while
+        // backgrounded, so returning here otherwise leaves a frozen transcript
+        // until the user backs all the way out and re-enters. `old == .background`
+        // (not just `new == .active`) skips the transient `.inactive` blips a
+        // sheet/alert/control-center pull causes, which aren't real resumes.
+        .onChange(of: scenePhase) { old, new in
+            if old == .background, new == .active {
+                Task { await model.refreshOnForeground() }
+            }
+        }
         // Haptics — the app's marquee "felt" moments, all keyed off existing
         // @Observable state. Vocabulary: success = a reply completed, error = it
         // failed, warning = the agent needs you (a permission / question card
